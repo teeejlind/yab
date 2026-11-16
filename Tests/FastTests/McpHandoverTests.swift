@@ -2,11 +2,11 @@ import Foundation
 import Testing
 @testable import Fast
 
-// A `yab mcp` whose binary an update replaced is refused by the browser for
+// A `yab mcp` whose app an update replaced is refused by the browser for
 // the rest of its client's chat (McpHandover): it hands the client to a
-// server started from the copy on disk. What is handed over, and in what
-// order. Code Signing's side, errSecCSStaticCodeChanged for a process whose
-// file was replaced under it, is shown in the pull request.
+// server started from the copy at its path. What is handed over, and in what
+// order. The update itself (Update.Swap's rename aside, move in and sweep,
+// against BenchCaller) is run end to end in the pull request.
 @Suite struct McpHandoverTests {
     static func line(_ value: [String: Any]) -> String {
         String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self)
@@ -84,10 +84,23 @@ import Testing
         #expect(McpHandover(executable: "/usr/bin/true", arguments: [], greeting: greeting) { _ in } == nil)
     }
 
-    @Test func codeUnchangedOnDiskIsNotHandedOver() {
-        // The test runner's binary is what is on disk: a refusal it gets is
-        // the browser's answer to a program that isn't Yab, and stays one.
-        #expect(!McpHandover.replacedOnDisk())
+    @Test func codeUnchangedOnDiskIsNotHandedOver() throws {
+        // The test runner's binary is what is at its path: a refusal it gets
+        // is the browser's answer to a program that isn't Yab, and stays one.
+        let path = try #require(Bundle.main.executablePath)
+        #expect(!McpHandover.replacedOnDisk(path))
+    }
+
+    @Test func anotherFileAtThePathIsAReplacement() throws {
+        // As after Update.Swap: the path names a file other than the one
+        // this process runs, which the kernel still knows.
+        let running = try #require(McpHandover.runningFile())
+        var other = stat()
+        #expect(stat("/bin/sh", &other) == 0)
+        #expect(UInt64(other.st_ino) != running.inode)
+        #expect(McpHandover.replacedOnDisk("/bin/sh"))
+        // Nothing there: nothing to start in its place.
+        #expect(!McpHandover.replacedOnDisk("/nonexistent/yab.app/Contents/MacOS/yab"))
     }
 }
 

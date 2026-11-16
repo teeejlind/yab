@@ -385,12 +385,14 @@ enum Mcp {
         }
     }
 
-    /// Refused as not Yab's own code because an update replaced this
-    /// binary on disk (McpHandover): a server started from the new copy
-    /// answers `message`, and everything after it. Whether one does.
+    /// Refused as not Yab's own code because an update replaced the app
+    /// this was started from (McpHandover): a server started from the new
+    /// copy answers `message`, and everything after it. Whether one does.
     private static func handOver(_ message: [String: Any]) -> Bool {
+        // The path this was started from, kept from launch (LaunchCopy):
+        // after an update the new copy is there.
         guard successor == nil, let greeting, let inbox, let executable = Bundle.main.executablePath,
-              McpHandover.replacedOnDisk() else { return false }
+              McpHandover.replacedOnDisk(executable) else { return false }
         let out = FileHandle.standardOutput
         let write: (Data) -> Void = { data in
             do { try out.write(contentsOf: data) } catch { exit(0) }

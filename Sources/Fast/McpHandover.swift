@@ -1,34 +1,58 @@
 import Foundation
+import MachO
 import Security
 import YabStore
 
-// A `yab mcp` that outlived its own binary: hands its client to one started
-// from the copy on disk now.
+// A `yab mcp` that outlived its own app: hands its client to one started
+// from the copy at its path now.
 //
 // An agent's server lives as long as the agent's chat, for hours, and Claude
-// Code or Codex never start it again on their own. An update replaces
-// yab.app under it, and the browser that comes back answers only Yab's own
-// code (BenchCaller): Code Signing checks the caller's running code against
-// its file on disk, which is now the new build's, and says
-// errSecCSStaticCodeChanged. Every call of the old server was refused with
-// BenchCaller.refusal for the rest of the chat, while `yab` in the same
-// shell, started from the new copy, worked.
+// Code or Codex never start it again on their own. An update (Update.Swap)
+// renames yab.app aside to yab.app.old, moves the new one in, and sweeps the
+// .old once the browser is closed. A running process follows the rename, so
+// until the sweep the old server still validates as Yab's code. After it,
+// its code has no file left: Code Signing can't make a code object for it
+// at all, BenchCaller answers that it isn't Yab's, and the browser that
+// came back refused every call with BenchCaller.refusal for the rest of the
+// chat, while `yab` in the same shell, started from the new copy, worked.
+// A new copy written over the old in place (cp, a build script) ends the
+// same way, as errSecCSStaticCodeChanged.
 //
-// The check is right: the old process is not the code on disk. So the
-// server that finds itself refused for that reason starts `yab mcp` again
-// from its own path, with its own arguments, says the client's `initialize`
-// to it, and from then on only carries lines both ways. The new server is
-// an ordinary one; nothing it is handed is anything a program couldn't
-// already give `yab mcp` by starting it.
+// The check is right: that process is not the code on disk. So the server
+// refused while another file stands at its own path starts `yab mcp` again
+// from that path, with its own arguments, says the client's `initialize` to
+// it, and from then on only carries lines both ways. The new server is an
+// ordinary one, checked by the browser as any other; nothing it is handed is
+// anything a program couldn't already give `yab mcp` by starting it.
 
 final class McpHandover: @unchecked Sendable {
-    /// Whether the code this process runs is no longer what is on disk at
-    /// its path: an update or a new copy replaced it. Asked only after a
-    /// refusal, as validating a whole bundle takes a fifth of a second.
-    static func replacedOnDisk() -> Bool {
+    /// Whether the file at `path`, where this process was started from, is
+    /// no longer the one it runs: set aside and swept by an update, replaced
+    /// by a new copy, or written over in place. Nothing at `path` is not a
+    /// replacement: there is nothing to start. Asked only after a refusal.
+    static func replacedOnDisk(_ path: String) -> Bool {
+        guard let running = runningFile() else { return false }
+        var now = stat()
+        guard stat(path, &now) == 0 else { return false }
+        if UInt64(now.st_dev) != running.device || UInt64(now.st_ino) != running.inode { return true }
+        // The same file with new contents. Validating a whole bundle takes
+        // a fifth of a second, so this is asked last.
         var me: SecCode?
         guard SecCodeCopySelf([], &me) == errSecSuccess, let me else { return false }
         return SecCodeCheckValidity(me, [], nil) == errSecCSStaticCodeChanged
+    }
+
+    /// The file this process's own code is mapped from, as the kernel keeps
+    /// it: still the same file after a rename, and after it was removed,
+    /// when Code Signing and proc_pidpath no longer find it.
+    static func runningFile() -> (device: UInt64, inode: UInt64)? {
+        guard let header = _dyld_get_image_header(0) else { return nil }
+        var info = proc_regionwithpathinfo()
+        let size = Int32(MemoryLayout<proc_regionwithpathinfo>.size)
+        guard proc_pidinfo(getpid(), PROC_PIDREGIONPATHINFO, UInt64(UInt(bitPattern: header)), &info, size) == size
+        else { return nil }
+        let stat = info.prp_vip.vip_vi.vi_stat
+        return (UInt64(stat.vst_dev), stat.vst_ino)
     }
 
     private let process: Process
